@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content Brief Converter</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="wrap">
+    <h1>Content Brief Converter</h1>
+    <p class="subtitle">Drop in a Word content brief (.docx) to get back a Myer-format content-brief spreadsheet (.xlsx).
+      <a href="{{ url_for('logout') }}">Log out</a>
+    </p>
+
+    <div id="dropzone" class="dropzone">
+      <p id="dropzone-text">Drag &amp; drop .docx file(s) here<br><span>or click to choose files</span></p>
+      <input type="file" id="file-input" accept=".docx" multiple hidden>
+    </div>
+
+    <div id="results"></div>
+  </div>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

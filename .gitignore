@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+outputs/
+server_out.log
+server_err.log
+
+# Real content briefs (Myer work content) should never be committed --
+# this app only needs the code, not sample/reference documents.
+*.docx
+*.xlsx

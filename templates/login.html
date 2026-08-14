@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Content Brief Converter - Login</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="wrap">
+    <h1>Content Brief Converter</h1>
+    <p class="subtitle">Enter the password to continue.</p>
+    <section class="card">
+      <form method="post">
+        <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password">
+        <button type="submit" style="margin-top: 16px;">Log in</button>
+      </form>
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    </section>
+  </div>
+</body>
+</html>

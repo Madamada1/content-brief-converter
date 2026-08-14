@@ -1,0 +1,35 @@
+CONTENT BRIEF CONVERTER — HOW TO RUN
+=====================================
+
+1. Double-click "Start App.bat" in this folder.
+   - The first time you run it, it will take a minute or two to set itself up.
+   - A black window will open and stay open — this is the app running.
+     Leave it open while you use the app; closing it stops the app.
+   - Your web browser will open automatically to the app's page
+     (http://127.0.0.1:5050).
+
+2. Drag a Word content brief (.docx) onto the box in the browser page
+   (or click the box to choose a file). You can drop more than one at a time.
+
+3. Once it says "Converted successfully", click the Download button to
+   save the finished Excel content brief. Files are also saved in the
+   "outputs" folder inside this project, in case you close the browser
+   before downloading.
+
+4. To use the app again later, just double-click "Start App.bat" again.
+
+Requirements
+------------
+This app needs Python installed on your computer. If "Start App.bat" says
+it can't find Python, install it from https://www.python.org/downloads/
+and make sure to tick "Add python.exe to PATH" during installation, then
+run "Start App.bat" again.
+
+Notes
+-----
+- The app expects the Word brief to follow the same template as the
+  "Mattress Buying Guide Content Brief - Myer.docx" example: a
+  "Draft Content" section with H1/H2/H3 headings and finished copy.
+- It only reads the finished "Draft Content" section — the instructional
+  brief section above it (character counts, writer notes) is not copied
+  into the spreadsheet.
