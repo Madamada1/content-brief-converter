@@ -339,45 +339,60 @@ def _parse_draft_content(items):
     return draft_sections, anchors
 
 
+MYER_PRODUCT_URL_RE = re.compile(r"^https?://(?:www\.)?myer\.com\.au/p/\S+$", re.IGNORECASE)
+
+
+def _product_url_marker(para):
+    """If `para` is a dedicated product-URL marker line, return that URL,
+    else None. Matches a Word hyperlink run whose target is a Myer product
+    page (`/p/...`), or a plain-text paragraph that is nothing but such a
+    URL (copy/pasted or generated content doesn't always carry a real
+    hyperlink field) -- independent of bullet/bold formatting, since that
+    varies between briefs and isn't a reliable signal on its own.
+    """
+    runs = [r for r in para["runs"] if r.text and r.text.strip()]
+    if not runs:
+        return None
+    if len(runs) == 1 and runs[0].hyperlink and MYER_PRODUCT_URL_RE.match(runs[0].hyperlink.strip()):
+        return runs[0].hyperlink.strip()
+    full_text = "".join(r.text for r in runs).strip()
+    if MYER_PRODUCT_URL_RE.match(full_text):
+        return full_text
+    return None
+
+
 def _split_product_entries(rich_paragraphs):
     """Detect a repeating "product recommendation" pattern within a
-    section's body copy: a bulleted paragraph that is nothing but a
-    hyperlink (the product's URL), immediately followed by a paragraph
-    that is nothing but bold text (the product's name), followed by plain
-    description lines up to the next such URL marker (or the end of the
-    section). This shape is how Jaywing briefs write out named product
-    picks (e.g. "The Best Shavers To Buy") -- one URL+name+description
-    group per product -- and is generic enough to apply to any brief that
-    follows the same convention, not just one specific document.
+    section's body copy: a paragraph that is nothing but a Myer product
+    URL (`_product_url_marker`), immediately followed by the product's
+    name, followed by plain description lines (best-for/pros/cons/rating/
+    cost, or whatever the brief includes) up to the next such URL marker
+    (or the end of the section). This shape is how briefs write out named
+    product picks/comparison grids (e.g. "The Best Kettles To Buy") -- one
+    URL+name+description group per product -- and is generic enough to
+    apply to any brief that follows the same convention, not just one
+    specific document or product category.
 
     Returns (intro_paragraphs, products), where intro_paragraphs is
     whatever body copy precedes the first product (or all of it, if no
     product pattern is found) and products is a list of
     {"name": str, "url": str, "paragraphs": [rich paragraphs...]}.
     """
-
-    def is_link_only(para):
-        return para["bullet"] and len(para["runs"]) == 1 and bool(para["runs"][0].hyperlink)
-
-    def is_bold_only(para):
-        return not para["bullet"] and len(para["runs"]) == 1 and para["runs"][0].bold
-
-    starts = [i for i, p in enumerate(rich_paragraphs) if is_link_only(p)]
+    starts = [(i, url) for i, p in enumerate(rich_paragraphs) if (url := _product_url_marker(p))]
     if not starts:
         return rich_paragraphs, []
 
-    intro = rich_paragraphs[: starts[0]]
+    intro = rich_paragraphs[: starts[0][0]]
     products = []
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else len(rich_paragraphs)
-        url = rich_paragraphs[start]["runs"][0].hyperlink
+    for idx, (start, url) in enumerate(starts):
+        end = starts[idx + 1][0] if idx + 1 < len(starts) else len(rich_paragraphs)
         name_idx = start + 1
-        if name_idx < end and is_bold_only(rich_paragraphs[name_idx]):
-            name = rich_paragraphs[name_idx]["runs"][0].text.strip()
+        if name_idx < end:
+            name = "".join(r.text for r in rich_paragraphs[name_idx]["runs"]).strip()
             desc_paragraphs = rich_paragraphs[name_idx + 1 : end]
         else:
             name = ""
-            desc_paragraphs = rich_paragraphs[start + 1 : end]
+            desc_paragraphs = []
         products.append({"name": name, "url": url, "paragraphs": desc_paragraphs})
 
     return intro, products
