@@ -17,6 +17,7 @@ output brief; the metadata half is used for the reference sheet.
 
 import re
 from dataclasses import dataclass
+from urllib.parse import unquote
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -91,8 +92,23 @@ def _extract_runs(paragraph):
             text = item.text
             if text:
                 bold = bool(item.runs[0].bold) if item.runs else False
-                runs.append(TextRun(text=text, bold=bold, underline=True, hyperlink=item.address))
+                runs.append(TextRun(text=text, bold=bold, underline=True, hyperlink=clean_url(item.url)))
     return runs
+
+
+def clean_url(url):
+    """Repair hyperlink targets mangled by copy/pasting from Word Online,
+    e.g. 'https://auc-word-edit.officeapps.live.com/we/8.%09https:/www.myer
+    .com.au/p/...' -> 'https://www.myer.com.au/p/...': the real link is
+    whatever follows the *last* 'http(s):/', with its missing slash restored."""
+    if not url:
+        return None
+    url = unquote(url).strip()
+    starts = [m.start() for m in re.finditer(r"https?:/", url, re.IGNORECASE)]
+    if starts:
+        url = url[starts[-1]:]
+    url = re.sub(r"^(https?):/+", r"\1://", url, flags=re.IGNORECASE)
+    return url.strip() or None
 
 
 def _is_bullet_paragraph(paragraph):
@@ -322,9 +338,11 @@ def _parse_draft_content(items):
 
     for section in draft_sections:
         rich_paragraphs = section.pop("rich_paragraphs")
-        intro_paragraphs, products = _split_product_entries(rich_paragraphs)
+        intro_paragraphs, products, outro_paragraphs = _split_product_entries(rich_paragraphs)
         section["copy_runs"] = intro_paragraphs
         section["copy"] = _plain_text_from_rich_paragraphs(intro_paragraphs)
+        section["copy_after_runs"] = outro_paragraphs
+        section["copy_after"] = _plain_text_from_rich_paragraphs(outro_paragraphs)
         section["products"] = [
             {
                 "name": p["name"],
@@ -343,21 +361,26 @@ MYER_PRODUCT_URL_RE = re.compile(r"^https?://(?:www\.)?myer\.com\.au/p/\S+$", re
 
 
 def _product_url_marker(para):
-    """If `para` is a dedicated product-URL marker line, return that URL,
-    else None. Matches a Word hyperlink run whose target is a Myer product
-    page (`/p/...`), or a plain-text paragraph that is nothing but such a
-    URL (copy/pasted or generated content doesn't always carry a real
-    hyperlink field) -- independent of bullet/bold formatting, since that
-    varies between briefs and isn't a reliable signal on its own.
+    """If `para` is a dedicated product-URL marker line, return (url,
+    inline_name), else None. Matches a Word hyperlink run whose target is a
+    Myer product page (`/p/...`), or a plain-text paragraph that is nothing
+    but such a URL (copy/pasted or generated content doesn't always carry a
+    real hyperlink field) -- independent of bullet/bold formatting, since
+    that varies between briefs and isn't a reliable signal on its own.
+
+    inline_name is the hyperlink's display text when it's a product name
+    rather than the URL itself (e.g. "Philips Baristina" linked to its
+    product page), in which case the name line *is* the marker line.
     """
     runs = [r for r in para["runs"] if r.text and r.text.strip()]
     if not runs:
         return None
     if len(runs) == 1 and runs[0].hyperlink and MYER_PRODUCT_URL_RE.match(runs[0].hyperlink.strip()):
-        return runs[0].hyperlink.strip()
+        text = runs[0].text.strip()
+        return runs[0].hyperlink.strip(), (None if URL_IN_TEXT_RE.match(text) else text)
     full_text = "".join(r.text for r in runs).strip()
     if MYER_PRODUCT_URL_RE.match(full_text):
-        return full_text
+        return full_text, None
     return None
 
 
@@ -373,21 +396,28 @@ def _split_product_entries(rich_paragraphs):
     apply to any brief that follows the same convention, not just one
     specific document or product category.
 
-    Returns (intro_paragraphs, products), where intro_paragraphs is
-    whatever body copy precedes the first product (or all of it, if no
-    product pattern is found) and products is a list of
-    {"name": str, "url": str, "paragraphs": [rich paragraphs...]}.
+    If no URL markers are found, falls back to _split_field_records (the
+    "Name: / Type: / Pros: / ..." layout).
+
+    Returns (intro_paragraphs, products, outro_paragraphs), where
+    intro_paragraphs is whatever body copy precedes the first product (or
+    all of it, if no product pattern is found), outro_paragraphs is body
+    copy after the last product (field-record layout only), and products
+    is a list of {"name": str, "url": str, "paragraphs": [rich paragraphs...]}.
     """
-    starts = [(i, url) for i, p in enumerate(rich_paragraphs) if (url := _product_url_marker(p))]
+    starts = [(i, *marker) for i, p in enumerate(rich_paragraphs) if (marker := _product_url_marker(p))]
     if not starts:
-        return rich_paragraphs, []
+        return _split_field_records(rich_paragraphs)
 
     intro = rich_paragraphs[: starts[0][0]]
     products = []
-    for idx, (start, url) in enumerate(starts):
+    for idx, (start, url, inline_name) in enumerate(starts):
         end = starts[idx + 1][0] if idx + 1 < len(starts) else len(rich_paragraphs)
         name_idx = start + 1
-        if name_idx < end:
+        if inline_name:
+            name = inline_name
+            desc_paragraphs = rich_paragraphs[start + 1 : end]
+        elif name_idx < end:
             name = "".join(r.text for r in rich_paragraphs[name_idx]["runs"]).strip()
             desc_paragraphs = rich_paragraphs[name_idx + 1 : end]
         else:
@@ -395,4 +425,121 @@ def _split_product_entries(rich_paragraphs):
             desc_paragraphs = []
         products.append({"name": name, "url": url, "paragraphs": desc_paragraphs})
 
-    return intro, products
+    return intro, products, []
+
+
+# "Label: value" lines, e.g. "Pros: Easy milk drinks" -- label is 1-4 words.
+FIELD_LINE_RE = re.compile(r"^\s*([A-Za-z][A-Za-z'&/\-]*(?:\s+[A-Za-z'&/\-]+){0,3})\s*:\s*(\S.*)$")
+NAME_LABELS = {"name", "product", "product name", "model"}
+URL_IN_TEXT_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+MIN_RECORDS = 2
+MIN_REPEATED_FIELDS = 3
+
+
+def _para_text(para):
+    return "".join(r.text for r in para["runs"]).strip()
+
+
+def _field_label(para):
+    match = FIELD_LINE_RE.match(_para_text(para))
+    return match.group(1).strip().lower() if match else None
+
+
+def _split_field_records(rich_paragraphs):
+    """Detect a product comparison written as repeated labelled fields, e.g.
+
+        Name: Nespresso Vertuo Creatista   (name often hyperlinked)
+        Type: Capsule
+        Pros: ...  Cons: ...  Star Rating: 4.5/5  Price: $879.20
+        Name: De'Longhi Eletta Ultra
+        ...
+
+    A section is treated as a product grid when the same set of field
+    labels (at least MIN_REPEATED_FIELDS of them) repeats for at least
+    MIN_RECORDS items -- ordinary copy like a "How to choose" list of
+    one-off "Budget: / Size:" tips never repeats its labels, so it's left
+    alone. A record starts at each occurrence of the "Name:" field if there
+    is one, otherwise at each occurrence of the first field label (taking an
+    unlabelled one-line name directly above it as the product name).
+
+    The product URL is the record's first hyperlink (usually on the name),
+    falling back to a plain-text URL anywhere in the record.
+    """
+    labels = [_field_label(p) for p in rich_paragraphs]
+    counts = {}
+    for label in labels:
+        if label:
+            counts[label] = counts.get(label, 0) + 1
+    repeated = {label for label, n in counts.items() if n >= MIN_RECORDS}
+    if len(repeated) < MIN_REPEATED_FIELDS:
+        return rich_paragraphs, [], []
+
+    name_labels = [l for l in repeated if l in NAME_LABELS]
+    if name_labels:
+        start_label = name_labels[0]
+    else:
+        start_label = next(l for l in labels if l in repeated)
+
+    starts = [i for i, label in enumerate(labels) if label == start_label]
+
+    # Unlabelled name line directly above each start (e.g. "Philips Baristina"
+    # then "Type: ..."): include it in the record as the name. Decided from
+    # the 2nd record on, since only those are sandwiched between records --
+    # the 1st record's line above could just as well be intro copy.
+    name_above = (
+        start_label not in NAME_LABELS
+        and starts[0] > 0
+        and all(labels[i - 1] is None and _looks_like_name(rich_paragraphs[i - 1]) for i in starts[1:])
+    )
+    if name_above:
+        starts = [i - 1 for i in starts]
+
+    # The last record ends at the first paragraph that isn't one of the
+    # repeated fields (closing copy after the grid).
+    end = starts[-1] + (2 if name_above else 1)
+    while end < len(rich_paragraphs) and labels[end] in repeated:
+        end += 1
+
+    intro = rich_paragraphs[: starts[0]]
+    outro = rich_paragraphs[end:]
+    products = []
+    for idx, start in enumerate(starts):
+        stop = starts[idx + 1] if idx + 1 < len(starts) else end
+        products.append(_field_record_to_product(rich_paragraphs[start:stop], name_above))
+    return intro, products, outro
+
+
+def _looks_like_name(para):
+    text = _para_text(para)
+    return 0 < len(text) <= 80 and not text.endswith((".", "?", "!", ":"))
+
+
+def _field_record_to_product(paragraphs, name_above):
+    name, name_idx = "", None
+    if name_above:
+        name, name_idx = _para_text(paragraphs[0]), 0
+    else:
+        for i, para in enumerate(paragraphs):
+            label = _field_label(para)
+            if label in NAME_LABELS:
+                name, name_idx = FIELD_LINE_RE.match(_para_text(para)).group(2).strip(), i
+                break
+
+    url, url_only_idx = None, None
+    ordered = ([paragraphs[name_idx]] if name_idx is not None else []) + paragraphs
+    for para in ordered:
+        link = next((r.hyperlink for r in para["runs"] if r.hyperlink), None)
+        if link:
+            url = link
+            break
+    if not url:
+        for i, para in enumerate(paragraphs):
+            match = URL_IN_TEXT_RE.search(_para_text(para))
+            if match:
+                url = match.group(0)
+                if match.group(0) == _para_text(para):
+                    url_only_idx = i
+                break
+
+    desc = [p for i, p in enumerate(paragraphs) if i not in (name_idx, url_only_idx)]
+    return {"name": name, "url": url, "paragraphs": desc}

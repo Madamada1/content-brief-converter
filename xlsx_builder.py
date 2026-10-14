@@ -65,6 +65,7 @@ DY_FONT = Font(name=FONT_NAME, size=12, color="FF000000")
 
 HEADING_CELL_FONT = Font(name=FONT_NAME, bold=True, size=12, color="FF000000")
 BODY_CELL_FONT = Font(name=FONT_NAME, size=12, color="FF000000")
+BODY_LINE_HEIGHT = 19
 
 # Brand-logo / category link-grid rows (e.g. "BRAND LOGO ROW", "CATEGORY ROW")
 ROW_HEADLINE_FONT = Font(name=FONT_NAME, bold=True, size=13, color="FFC90CBD")
@@ -146,13 +147,13 @@ def _build_rich_copy(rich_paragraphs):
     return CellRichText(blocks) if blocks else None
 
 
-def _estimate_row_height(text, col_width_chars):
+def _estimate_row_height(text, col_width_chars, line_height=15):
     if not text:
         return 15
     lines = 0
     for line in str(text).split("\n"):
         lines += max(1, math.ceil(len(line) / max(col_width_chars, 10)))
-    return min(max(15, lines * 15), 409)  # 409 is Excel's row-height cap
+    return min(max(15, lines * line_height), 409)  # 409 is Excel's row-height cap
 
 
 def _set_col_widths(ws, widths):
@@ -301,7 +302,8 @@ def _content_data_row(ws, row, values, bold_cols=(), rich_cols=None):
         cell.font = HEADING_CELL_FONT if col in bold_cols else BODY_CELL_FONT
         cell.alignment = FIELD_VALUE_ALIGN
         chars = CONTENT_COL_CHARS.get(col, 40)
-        max_height = max(max_height, _estimate_row_height(value, chars))
+        # Size-12 Poppins wraps at ~19pt per line; 15pt clipped the last lines.
+        max_height = max(max_height, _estimate_row_height(value, chars, line_height=BODY_LINE_HEIGHT))
     ws.row_dimensions[row].height = max_height
     return row + 1
 
@@ -345,6 +347,21 @@ def _product_grid_block(ws, row, products):
             link_cell.hyperlink = product["url"]
             link_cell.font = LINK_FONT
             link_cell.fill = LINK_FILL
+    return row
+
+
+def _products_and_outro(ws, row, section):
+    """Write a section's PRODUCT GRID (if any), then any body copy that
+    followed the last product in the brief as a continuation Copy row."""
+    if section.get("products"):
+        row = _product_grid_block(ws, row, section["products"])
+    if section.get("copy_after", "").strip():
+        row = _content_data_row(
+            ws,
+            row,
+            {COL_MODULE: "Copy", COL_HEADLINE: "NA", COL_SUBCOPY: section["copy_after"], COL_ASSET: "NA"},
+            rich_cols={COL_SUBCOPY: section.get("copy_after_runs")},
+        )
     return row
 
 
@@ -413,8 +430,7 @@ def _write_content_blocks(ws, row, sections):
                 },
                 rich_cols={COL_SUBCOPY: section.get("copy_runs")},
             )
-            if section.get("products"):
-                row = _product_grid_block(ws, row, section["products"])
+            row = _products_and_outro(ws, row, section)
             i += 1
             continue
 
@@ -435,8 +451,7 @@ def _write_content_blocks(ws, row, sections):
                     },
                     rich_cols={COL_SUBCOPY: faq.get("copy_runs")},
                 )
-                if faq.get("products"):
-                    row = _product_grid_block(ws, row, faq["products"])
+                row = _products_and_outro(ws, row, faq)
                 i += 1
             continue
 
@@ -486,8 +501,7 @@ def _write_content_blocks(ws, row, sections):
         )
         if is_carousel:
             row = _dy_strip_block(ws, row, note)
-        if section.get("products"):
-            row = _product_grid_block(ws, row, section["products"])
+        row = _products_and_outro(ws, row, section)
         i += 1
 
     return row
